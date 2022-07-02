@@ -26,10 +26,11 @@ object SimplePoll {
     }
   }
 
-  def buildPoll(question: String, from: String, to: String): String = {
+  def buildPoll(question: String, from: String, to: String, withEnd: Boolean = true): String = {
+    val maxSize = 20
     val maybeDates = buildDates(from, to)
     maybeDates.map { dates =>
-      val groupString = dates.grouped(20)
+      val groupString = (dates :+ ":x: None of these dates/times work").grouped(20)
         .toList
         .map { dateGroup =>
           val choices = Iterator.iterate('a'.toInt)(_ + 1)

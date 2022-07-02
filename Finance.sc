@@ -11,8 +11,8 @@ object Finance {
     2020 -> 14 /* 1.4% */,
     2021 -> 70 /* 7.0% */)
 
-  def floor(cents: Long, purchaseDateString: String): Long = {
-    val purchaseDate = java.time.LocalDate.parse(purchaseDateString, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+  def floor(cents: Long, purchaseYearMonth: String): Long = {
+    val purchaseDate = java.time.YearMonth.parse(purchaseYearMonth).atDay(1)
     val oneYearAgo = java.time.LocalDate.now(java.time.ZoneId.of("America/New_York")).minusYears(1)
     val result = Iterator.iterate(purchaseDate)(_.plusYears(1))
       .takeWhile(_.isBefore(oneYearAgo))
