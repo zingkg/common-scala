@@ -24,8 +24,8 @@ object Finance {
       .foldLeft(cents) { case (centsSum, date) =>
         centsSum + (centsSum * (InflationRate(date.getYear)) / 1000)
       }
-    // multiply by 1%
-    result * 101 / 100
+    // multiply by 5%
+    result * 105 / 100
   }
 
   def rise(cents: Long): Long = {
@@ -44,27 +44,31 @@ object Finance {
   case class Row(symbol: String, currentPrice: Long, tradeDate: java.time.LocalDate, purchasePrice: Long, quantity: String, heldLong: Boolean)
 
   def parseCents(price: String): Long = {
-    val tokens = price.split("\\.")
-    val dollars = tokens(0).toLong
-    val cents = if (tokens.length == 2 && tokens(1).length > 2)
-      tokens(1).toLong / 10
-    else if (tokens.length == 2 && tokens(1).length == 2)
-      tokens(1).toLong
-    else if (tokens.length == 2 && tokens(1).length == 1)
-      tokens(1).toLong * 10
-    else
-      0
+    if (price.nonEmpty) {
+      val tokens = price.split("\\.")
+      val dollars = tokens(0).toLong
+      val cents = if (tokens.length == 2 && tokens(1).length > 2)
+        tokens(1).toLong / 10
+      else if (tokens.length == 2 && tokens(1).length == 2)
+        tokens(1).toLong
+      else if (tokens.length == 2 && tokens(1).length == 1)
+        tokens(1).toLong * 10
+      else
+        0
 
-    dollars * 100 + cents
+      dollars * 100 + cents
+    } else {
+      0
+    }
   }
 
-  def readYahooFile(filename: String): Map[String, Report] = {
+  def readYahooFile(filename: String, longOnly: Boolean = true): Map[String, Report] = {
     val bufferedSource = scala.io.Source.fromFile(filename)
     val lines = bufferedSource.getLines.toVector
     bufferedSource.close
 
     val rows = lines.drop(1).map(_.split(","))
-      .filter(tokens => tokens(0).nonEmpty && tokens.length > 15)
+      .filter(tokens => tokens(0).nonEmpty && tokens.length > 11 && (!longOnly || tokens.length >= 15))
       .map { tokens =>
         Row(
           tokens(0).toLowerCase,
@@ -72,14 +76,14 @@ object Finance {
           java.time.LocalDate.parse(tokens(9), java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")),
           parseCents(tokens(10)),
           tokens(11),
-          tokens(15).nonEmpty
+          tokens.length >= 15 && tokens(15).nonEmpty
         )
       }
       .toVector
 
     rows.groupBy(_.symbol)
       .map { case (symbol, rows) =>
-        val rowsHeldLong = rows.filter(row => row.heldLong && !row.quantity.startsWith("0."))
+        val rowsHeldLong = rows.filter(row => !row.quantity.startsWith("0.") && (!longOnly || row.heldLong))
         val currentPrice = rows(0).currentPrice
         val floors = rowsHeldLong
           .map(row => (row.tradeDate, floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
@@ -91,9 +95,7 @@ object Finance {
         val minRise = if (rises.nonEmpty) rises.min else 0
         symbol -> Report(currentPrice, maxFloor._1, maxFloor._2, minRise)
       }
-      .filter(_._2.maxFloor > 0)
   }
 }
 
 import Finance._
- 
