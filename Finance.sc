@@ -35,15 +35,14 @@ object Finance {
 
   case class Floor(tradeDate: java.time.LocalDate, floor: Long) {
     override def toString: String =
-      s"""trade_date: ${tradeDate.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))}
-        |floor: $floor""".stripMargin
+      s"""trade_date: ${tradeDate.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))}; floor: $floor""".stripMargin
   }
 
-  case class Report(currentPrice: Long, floors: Seq[Floor], minRise: Long) {
+  case class Report(currentPrice: Long, floors: Seq[Floor], rises: Seq[Long]) {
     override def toString: String =
       s"""current_price: $currentPrice
-        |floors: $floors
-        |min_rise: $minRise\n""".stripMargin
+        |rises: ${rises.mkString(", ")}
+        |floors: ${floors.mkString(",\n")}\n""".stripMargin
   }
 
   case class Row(symbol: String, currentPrice: Long, tradeDate: java.time.LocalDate, purchasePrice: Long, quantity: String, heldLong: Boolean)
@@ -94,11 +93,11 @@ object Finance {
           .map(row => Floor(row.tradeDate, floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
           .filter(_.floor < currentPrice)
         val rises = rowsHeldLong
-          .map(row => rise(row.purchasePrice))
+          .map(row => rise(floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
           .filter(_ > currentPrice)
+          .sorted
         val sortedFloors = if (floors.nonEmpty) floors.sortBy(_.floor)(Ordering[Long].reverse).take(3) else Seq.empty
-        val minRise = if (rises.nonEmpty) rises.min else 0
-        symbol -> Report(currentPrice, sortedFloors, minRise)
+        symbol -> Report(currentPrice, sortedFloors, rises.take(3))
       }
   }
 }
