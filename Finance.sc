@@ -10,7 +10,8 @@ object Finance {
     2019 -> 23 /* 2.3% */,
     2020 -> 14 /* 1.4% */,
     2021 -> 70 /* 7.0% */,
-    2022 -> 71 /* 7.1% */)
+    2022 -> 65 /* 6.5% */,
+    2023 -> 27 /* 2.7% */)
 
   def floor(cents: Long, purchaseYearMonth: String): Long = {
     floor(cents, java.time.YearMonth.parse(purchaseYearMonth))
@@ -24,8 +25,8 @@ object Finance {
       .foldLeft(cents) { case (centsSum, date) =>
         centsSum + (centsSum * (InflationRate(date.getYear)) / 1000)
       }
-    // multiply by 5%
-    result * 105 / 100
+    // multiply by 12%
+    result * 112 / 100
   }
 
   def rise(cents: Long): Long = {
@@ -33,19 +34,36 @@ object Finance {
     cents * 120 / 100
   }
 
-  case class Floor(tradeDate: java.time.LocalDate, floor: Long) {
-    override def toString: String =
-      s"""trade_date: ${tradeDate.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))}; floor: $floor""".stripMargin
+  def sRise(cents: Long): Long = {
+    // Multiply by 5%
+    cents * 105 / 100
   }
 
-  case class Report(currentPrice: Long, floors: Seq[Floor], rises: Seq[Long]) {
+  case class Floor(tradeDate: java.time.LocalDate, floor: Long, low: Long, isFifo: Boolean) {
     override def toString: String =
-      s"""current_price: $currentPrice
+      s"""trade_date: ${tradeDate.format(java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy"))}; floor: $floor$additionalInfo""".stripMargin
+
+    private def additionalInfo: String = {
+      val floorAboveLow = floor > low
+      if (isFifo && floorAboveLow)
+        s" F***"
+      else if (floorAboveLow)
+        " ***"
+      else if (isFifo)
+        " F"
+      else
+        ""
+    }
+  }
+
+  case class Report(currentPrice: Long, low: Long, high: Long, floors: Seq[Floor], rises: Seq[Long]) {
+    override def toString: String =
+      s"""current_price: $currentPrice; low: $low; high: $high
         |rises: ${rises.mkString(", ")}
         |floors: ${floors.mkString(",\n")}\n""".stripMargin
   }
 
-  case class Row(symbol: String, currentPrice: Long, tradeDate: java.time.LocalDate, purchasePrice: Long, quantity: String, heldLong: Boolean)
+  case class Row(symbol: String, currentPrice: Long, low: Long, high: Long, tradeDate: java.time.LocalDate, purchasePrice: Long, quantity: String, heldLong: Boolean)
 
   def parseCents(price: String): Long = {
     if (price.nonEmpty) {
@@ -66,7 +84,7 @@ object Finance {
     }
   }
 
-  def readYahooFile(filename: String, longOnly: Boolean = true): Map[String, Report] = {
+  def readYahooFile(filename: String, longOnly: Boolean = true, unrestrictedFloor: Boolean = true): Map[String, Report] = {
     val bufferedSource = scala.io.Source.fromFile(filename)
     val lines = bufferedSource.getLines.toVector
     bufferedSource.close
@@ -75,12 +93,14 @@ object Finance {
       .filter(tokens => tokens(0).nonEmpty && tokens.length > 11 && (!longOnly || tokens.length >= 15))
       .map { tokens =>
         Row(
-          tokens(0).toLowerCase,
-          parseCents(tokens(1)),
-          java.time.LocalDate.parse(tokens(9), java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")),
-          parseCents(tokens(10)),
-          tokens(11),
-          tokens.length >= 15 && tokens(15).nonEmpty
+          symbol = tokens(0).toLowerCase,
+          currentPrice = parseCents(tokens(1)),
+          low = parseCents(tokens(7)),
+          high = parseCents(tokens(6)),
+          tradeDate = java.time.LocalDate.parse(tokens(9), java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")),
+          purchasePrice = parseCents(tokens(10)),
+          quantity = tokens(11),
+          heldLong = tokens.length > 15 && tokens(15).nonEmpty
         )
       }
       .toVector
@@ -88,18 +108,35 @@ object Finance {
     rows.groupBy(_.symbol)
       .map { case (symbol, rows) =>
         val rowsHeldLong = rows.filter(row => !row.quantity.startsWith("0.") && (!longOnly || row.heldLong))
+        val firstRow = rows.sortBy(row => java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd").format(row.tradeDate)).headOption.map(_.tradeDate)
         val currentPrice = rows(0).currentPrice
-        val floors = rowsHeldLong
-          .map(row => Floor(row.tradeDate, floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
-          .filter(_.floor < currentPrice)
+        val low = rows(0).low
+        val high = rows(0).high
         val rises = rowsHeldLong
-          .map(row => rise(floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
+          .map(row => sRise(floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate))))
           .filter(_ > currentPrice)
           .sorted
-        val sortedFloors = if (floors.nonEmpty) floors.sortBy(_.floor)(Ordering[Long].reverse).take(3) else Seq.empty
-        symbol -> Report(currentPrice, sortedFloors, rises.take(3))
+
+        val underFloors = rowsHeldLong
+          .map(row => Floor(row.tradeDate, floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate)), row.low, checkFifo(row, firstRow)))
+          .filter(_.floor < currentPrice)
+        val sortedUnderFloors = if (underFloors.nonEmpty) underFloors.sortBy(_.floor)(Ordering[Long].reverse).take(5) else Seq.empty
+        val sortedFloors = if (unrestrictedFloor) {
+          val overFloors = rowsHeldLong
+            .map(row => Floor(row.tradeDate, floor(row.purchasePrice, java.time.YearMonth.from(row.tradeDate)), row.low, checkFifo(row, firstRow)))
+            .filter(_.floor >= currentPrice)
+            .sortBy(_.floor)
+            .take(3)
+            .reverse
+          overFloors ++ sortedUnderFloors
+        } else {
+          sortedUnderFloors
+        }
+        symbol -> Report(currentPrice, low, high, sortedFloors, rises.take(5))
       }
   }
-}
 
-import Finance._
+  private def checkFifo(row: Row, firstRowDate: Option[java.time.LocalDate]): Boolean = {
+    firstRowDate.exists(_ == row.tradeDate)
+  }
+}
